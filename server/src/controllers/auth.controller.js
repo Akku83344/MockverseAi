@@ -2,31 +2,49 @@
 import { User } from "../models/user.model.js";
 import jwt from "jsonwebtoken"
 import { sendEmail } from "../utils/sendEmail.js";
+
 export const registerUser = async (req, res) => {
   try {
     const { username, email, password } = req.body;
-
-    // Validation
     if (!username || !email || !password) {
       return res.status(400).json({ message: "All fields are required." });
     }
 
-    // Check if user already exists
+   
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(409).json({ message: "Email already in use." });
     }
 
-    // Create new user
     const newUser = await User.create({ username, email, password });
+
+    const emailToken = newUser.generateEmailVerificationToken();
+
+    
+    await newUser.save({ validateBeforeSave: false });
+
+    // Create verification URL
+    const verifyURL = `${process.env.CLIENT_URL}/verify-email/${emailToken}`;
+
+    // Send verification email
+    await sendEmail({
+      email: newUser.email,
+      subject: "Verify Your Email",
+      username: newUser.username,
+      buttonText: "Verify Email",
+      buttonLink: verifyURL,
+      intro: "Thanks for registering. Please verify your email address.",
+      outro: "If you didn’t request this, please ignore this email.",
+    });
 
     // Send success response
     res.status(201).json({
-      message: "User registered successfully.",
+      message:
+        "User registered successfully. Please check your email to verify your account.",
       user: {
         _id: newUser._id,
-        email: newUser.email,
         username: newUser.username,
+        email: newUser.email,
       },
     });
   } catch (error) {
@@ -34,61 +52,85 @@ export const registerUser = async (req, res) => {
     res.status(500).json({ message: "Server error." });
   }
 };
+export const verifyEmail = async (req, res) => {
+  const { token } = req.params;
 
-
-
-export const loginUser = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    // 1. Validate input
-    if (!email || !password) {
-      return res.status(400).json({ message: "All fields are required" });
-    }
-
-    // 2. Check if user exists
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    // 3. Check password
-    const isMatch = await user.isPasswordCorrect(password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    // 4. Generate tokens
-    const accessToken = user.generateAccessToken();
-    const refreshToken = user.generateRefreshToken();
-
-    // 5. Store refresh token in DB
-    user.refreshToken = refreshToken;
-    await user.save();
-
-    // 6. Send tokens
-    res
-      .status(200)
-      .cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "Strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      })
-      .json({
-        message: "Login successful",
-        accessToken,
-        user: {
-          _id: user._id,
-          username: user.username,
-          email: user.email,
-        },
-      });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ message: "Server error" });
+  if (!token) {
+    return res.status(400).json({ message: "Invalid or missing token." });
   }
+
+  const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+  const user = await User.findOne({
+    verifyEmailToken: hashedToken,
+    verifyEmailExpiry: { $gt: Date.now() },
+  });
+
+  if (!user) {
+    return res.status(400).json({ message: "Token is invalid or has expired." });
+  }
+
+  user.isEmailVerified = true;
+  user.verifyEmailToken = undefined;
+  user.verifyEmailExpiry = undefined;
+
+  await user.save({ validateBeforeSave: false });
+
+  res.status(200).json({ message: "Email verified successfully. You can now log in." });
 };
+
+export const login = asyncHandler(async (req, res) => {
+  const { email, password } = req.body;
+
+  // 1. Check for email and password
+  if (!email || !password) {
+    return res.status(400).json({ message: "Email and password are required." });
+  }
+
+  // 2. Find user
+  const user = await User.findOne({ email });
+  if (!user) {
+    return res.status(404).json({ message: "Invalid email or password." });
+  }
+
+  // 3. Check password
+  const isPasswordValid = await user.isPasswordCorrect(password);
+  if (!isPasswordValid) {
+    return res.status(401).json({ message: "Invalid email or password." });
+  }
+
+  // 4. Check if email is verified
+  if (!user.isEmailVerified) {
+    return res.status(401).json({ message: "Please verify your email to login." });
+  }
+
+  // 5. Generate tokens
+  const accessToken = user.generateAccessToken();
+  const refreshToken = user.generateRefreshToken();
+
+  // 6. Store refreshToken in DB
+  user.refreshToken = refreshToken;
+  await user.save({ validateBeforeSave: false });
+
+  // 7. Set refreshToken as httpOnly cookie
+  res
+    .cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    })
+    .status(200)
+    .json({
+      message: "Login successful",
+      accessToken,
+      user: {
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+      },
+    });
+});
 
 export const refreshToken = async (req, res) => {
   try {

@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema(
     // For forgot password functionality
     forgotPasswordToken: { type: String },
     forgotPasswordExpiry: { type: Date },
+
+    // For email verification functionality
+    emailVerificationToken: { type: String },
+    emailVerificationExpiry: { type: Date },
   },
   { timestamps: true }
 );
@@ -65,7 +69,20 @@ userSchema.methods.generatePasswordResetToken = function () {
     .digest("hex");
 
   this.forgotPasswordToken = hashedToken;
-  this.forgotPasswordExpiry = Date.now() + 15 * 60 * 1000; // 15 minutes from now
+  this.forgotPasswordExpiry = Date.now() + 15 * 60 * 1000; // 15 minutes
+  return unHashedToken;
+};
+
+// Generate Email Verification Token
+userSchema.methods.generateEmailVerificationToken = function () {
+  const unHashedToken = crypto.randomBytes(20).toString("hex");
+  const hashedToken = crypto
+    .createHash("sha256")
+    .update(unHashedToken)
+    .digest("hex");
+
+  this.emailVerificationToken = hashedToken;
+  this.emailVerificationExpiry = Date.now() + 60 * 60 * 1000; // 1 hour
   return unHashedToken;
 };
 
