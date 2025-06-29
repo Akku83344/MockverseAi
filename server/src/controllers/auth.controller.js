@@ -242,3 +242,29 @@ export const resetPassword = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+export const handleSocialLogin = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user?._id);
+
+    if (!user) {
+      return next(new ApiError(404, "User does not exist"));
+    }
+
+    const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(user._id);
+
+    const options = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    };
+
+    return res
+      .status(301)
+      .cookie("accessToken", accessToken, options)
+      .cookie("refreshToken", refreshToken, options)
+      .redirect(`${process.env.CLIENT_SSO_REDIRECT_URL}?accessToken=${accessToken}&refreshToken=${refreshToken}`);
+  } catch (error) {
+    next(error);
+  }
+};
